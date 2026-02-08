@@ -15,9 +15,9 @@ TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN")
 TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID")
 
 try:
-    BATCH_SIZE = int(os.environ.get("BATCH_SIZE", 20))
+    BATCH_SIZE = int(os.environ.get("BATCH_SIZE", 50))
 except (ValueError, TypeError):
-    BATCH_SIZE = 20
+    BATCH_SIZE = 50
 
 # GLOBAL STATS for Web Dashboard
 stats = {
@@ -37,7 +37,7 @@ COINS = {
     "ETH": Bip44Coins.ETHEREUM,
     "BNB": Bip44Coins.BINANCE_SMART_CHAIN,
     "MATIC": Bip44Coins.POLYGON,
-    "AVAX": Bip44Coins.AVALANCHE,
+    "AVAX": Bip44Coins.AVAX_C_CHAIN,
     "SOL": Bip44Coins.SOLANA
 }
 
