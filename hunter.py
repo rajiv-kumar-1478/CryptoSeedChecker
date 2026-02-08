@@ -2,13 +2,13 @@ import asyncio
 import aiohttp
 import time
 import json
+import os
 from mnemonic import Mnemonic
 from bip_utils import (
     Bip39MnemonicGenerator, Bip39SeedGenerator, Bip39WordsNum,
     Bip44, Bip44Coins, Bip44Changes
 )
-
-import os
+from aiohttp import web
 
 # --- CONFIGURATION (Environment Variables preferred for Cloud) ---
 TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN")
@@ -18,8 +18,16 @@ try:
     BATCH_SIZE = int(os.environ.get("BATCH_SIZE", 10))
 except (ValueError, TypeError):
     BATCH_SIZE = 10
+
+# GLOBAL STATS for Web Dashboard
+stats = {
+    "checked_count": 0,
+    "last_mnemonic": "None",
+    "start_time": time.time(),
+    "status": "Starting..."
+}
+
 # --- COIN MAPPING ---
-# Mapping our coins to bip_utils constants
 COINS = {
     "BTC": Bip44Coins.BITCOIN,
     "LTC": Bip44Coins.LITECOIN,
@@ -32,6 +40,27 @@ COINS = {
     "AVAX": Bip44Coins.AVALANCHE,
     "SOL": Bip44Coins.SOLANA
 }
+
+async def handle_index(request):
+    elapsed = time.time() - stats["start_time"]
+    speed = stats["checked_count"] / max(1, elapsed)
+    html = f"""
+    <html>
+        <head><title>CryptoHunter Pro Status</title></head>
+        <body style='font-family: sans-serif; background: #121212; color: #fff; text-align: center; padding-top: 50px;'>
+            <h1 style='color: #00ff7f;'>CryptoHunter Pro v2.0</h1>
+            <div style='background: #1e1e1e; display: inline-block; padding: 20px; border-radius: 10px; border: 1px solid #333;'>
+                <p>Status: <span style='color: #00ff7f;'>{{stats["status"]}}</span></p>
+                <p>Total Checked: <b>{{stats["checked_count"]}}</b></p>
+                <p>Speed: <b>{{speed:.2f} seeds/sec</b></p>
+                <p>Last Mnemonic: <br><code style='color: #00bfff;'>{{stats["last_mnemonic"]}}</code></p>
+                <p>Uptime: {{int(elapsed/60)}} minutes</p>
+            </div>
+            <p style='color: #888; margin-top: 20px;'>Render Free Tier Health-Check Active</p>
+        </body>
+    </html>
+    """
+    return web.Response(text=html, content_type='text/html')
 
 async def send_telegram(message):
     if not TELEGRAM_BOT_TOKEN or str(TELEGRAM_BOT_TOKEN) in ["None", "YOUR_BOT_TOKEN"]:
@@ -66,12 +95,11 @@ async def check_balance_btc(session, addresses):
     return None
 
 async def check_balance_blockcypher(session, coin_slug, addresses):
-    addr_str = ";".join(addresses[:20]) # Limit 20
+    addr_str = ";".join(addresses[:20])
     url = f"https://api.blockcypher.com/v1/{coin_slug}/main/addrs/{addr_str}?balance_only=true"
     try:
         async with session.get(url) as resp:
             data = await resp.json()
-            # BlockCypher multi-addr returns a list of objects
             if isinstance(data, list):
                 for item in data:
                     if item.get("balance", 0) > 0:
@@ -98,16 +126,10 @@ async def check_balance_rpc(session, rpc_url, address):
     return False
 
 async def hunter_loop():
-    print(f"[*] Starting CryptoHunter Pro Python CLI...")
-    print(f"[*] Batch Size: {BATCH_SIZE} | Coins: {', '.join(COINS.keys())}")
-    
-    checked_count = 0
-    start_time = time.time()
-
+    stats["status"] = "Hunting..."
     async with aiohttp.ClientSession() as session:
         while True:
             batch_seeds = []
-            # 1. Generate Batch
             for _ in range(BATCH_SIZE):
                 mnemonic = Bip39MnemonicGenerator().FromWordsNum(Bip39WordsNum.WORDS_NUM_12)
                 seed_bytes = Bip39SeedGenerator(mnemonic).Generate()
@@ -122,22 +144,18 @@ async def hunter_loop():
                 
                 batch_seeds.append(addrs)
 
-            # 2. Check Balances in Parallel
             tasks = []
-            task_info = [] # Track which mnemonic/coin each task belongs to
+            task_info = []
             
-            # BTC (Multi-address)
             btc_addrs = [s["BTC"] for s in batch_seeds]
             tasks.append(check_balance_btc(session, btc_addrs))
             task_info.append(("BTC_BATCH", None))
             
-            # Legacy Multi-address (BlockCypher)
             for coin_name, slug in [("LTC", "ltc"), ("DOGE", "doge"), ("BCH", "bch"), ("DASH", "dash")]:
                 addrs = [s[coin_name] for s in batch_seeds]
                 tasks.append(check_balance_blockcypher(session, slug, addrs))
                 task_info.append(("LEGACY_BATCH", (coin_name, addrs)))
 
-            # EVM / Solana
             rpc_configs = [
                 ("ETH", "https://rpc.ankr.com/eth"),
                 ("BNB", "https://bsc-dataseed.binance.org"),
@@ -150,43 +168,43 @@ async def hunter_loop():
                     tasks.append(check_balance_rpc(session, rpc_url, s[coin_name]))
                     task_info.append(("SINGLE", (coin_name, s[coin_name], s["mnemonic"])))
 
-            # Execute all
             results = await asyncio.gather(*tasks)
             
-            # 3. Process Results
             for i, res in enumerate(results):
                 if not res: continue
-                
                 type, info = task_info[i]
                 msg = ""
-                
                 if type == "BTC_BATCH":
-                    # res is the address
                     m = next((s["mnemonic"] for s in batch_seeds if s["BTC"] == res), "Unknown")
-                    msg = f"🟢 SUCCESS: BTC Found!\nAddress: `{res}`\nSeed: `{m}`"
-                
+                    msg = f"🟢 SUCCESS: BTC Found!\nAddress: {res}\nSeed: {m}"
                 elif type == "LEGACY_BATCH":
                     coin, addrs = info
                     m = next((s["mnemonic"] for s in batch_seeds if s[coin] == res), "Unknown")
-                    msg = f"🟢 SUCCESS: {coin} Found!\nAddress: `{res}`\nSeed: `{m}`"
-                
+                    msg = f"🟢 SUCCESS: {coin} Found!\nAddress: {res}\nSeed: {m}"
                 elif type == "SINGLE":
                     coin, addr, mnem = info
-                    msg = f"🟢 SUCCESS: {coin} Found!\nAddress: `{addr}`\nSeed: `{mnem}`"
-
+                    msg = f"🟢 SUCCESS: {coin} Found!\nAddress: {addr}\nSeed: {mnem}"
                 if msg:
                     print(f"\n[!!!] {msg}")
                     await send_telegram(msg)
-                    with open("found.txt", "a") as f:
-                        f.write(msg.replace("\n", " | ") + "\n")
 
-            checked_count += BATCH_SIZE
-            elapsed = time.time() - start_time
-            speed = checked_count / elapsed
-            print(f"[*] Checked: {checked_count} | Speed: {speed:.2f} seeds/sec", end="\r")
-            
-            # Respect API limits
+            stats["checked_count"] += BATCH_SIZE
+            stats["last_mnemonic"] = batch_seeds[-1]["mnemonic"]
+            print(f"[*] Checked: {stats['checked_count']} | Speed: {stats['checked_count'] / (time.time() - stats['start_time']):.2f} seeds/sec", end="\r")
             await asyncio.sleep(1)
 
+async def main():
+    app = web.Application()
+    app.router.add_get('/', handle_index)
+    runner = web.AppRunner(app)
+    await runner.setup()
+    site = web.TCPSite(runner, '0.0.0.0', 10000)
+    await site.start()
+    print("[*] Web Dashboard active on port 10000 (Render Health-Check)")
+    await hunter_loop()
+
 if __name__ == "__main__":
-    asyncio.run(hunter_loop())
+    try:
+        asyncio.run(main())
+    except KeyboardInterrupt:
+        pass
