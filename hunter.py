@@ -15,9 +15,9 @@ TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN")
 TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID")
 
 try:
-    BATCH_SIZE = int(os.environ.get("BATCH_SIZE", 10))
+    BATCH_SIZE = int(os.environ.get("BATCH_SIZE")
 except (ValueError, TypeError):
-    BATCH_SIZE = 10
+    BATCH_SIZE = 20
 
 # GLOBAL STATS for Web Dashboard
 stats = {
@@ -50,11 +50,11 @@ async def handle_index(request):
         <body style='font-family: sans-serif; background: #121212; color: #fff; text-align: center; padding-top: 50px;'>
             <h1 style='color: #00ff7f;'>CryptoHunter Pro v2.0</h1>
             <div style='background: #1e1e1e; display: inline-block; padding: 20px; border-radius: 10px; border: 1px solid #333;'>
-                <p>Status: <span style='color: #00ff7f;'>{{stats["status"]}}</span></p>
-                <p>Total Checked: <b>{{stats["checked_count"]}}</b></p>
-                <p>Speed: <b>{{speed:.2f} seeds/sec</b></p>
-                <p>Last Mnemonic: <br><code style='color: #00bfff;'>{{stats["last_mnemonic"]}}</code></p>
-                <p>Uptime: {{int(elapsed/60)}} minutes</p>
+                <p>Status: <span style='color: #00ff7f;'>{stats["status"]}</span></p>
+                <p>Total Checked: <b>{stats["checked_count"]}</b></p>
+                <p>Speed: <b>{speed:.2f} seeds/sec</b></p>
+                <p>Last Mnemonic: <br><code style='color: #00bfff;'>{stats["last_mnemonic"]}</code></p>
+                <p>Uptime: {int(elapsed/60)} minutes</p>
             </div>
             <p style='color: #888; margin-top: 20px;'>Render Free Tier Health-Check Active</p>
         </body>
