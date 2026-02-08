@@ -15,9 +15,9 @@ TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN")
 TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID")
 
 try:
-    BATCH_SIZE = int(os.environ.get("BATCH_SIZE", 50))
+    BATCH_SIZE = int(os.environ.get("BATCH_SIZE", 25))
 except (ValueError, TypeError):
-    BATCH_SIZE = 50
+    BATCH_SIZE = 25
 
 # GLOBAL STATS for Web Dashboard
 stats = {
@@ -143,11 +143,20 @@ async def check_balance_rpc(session, rpc_url, address):
         pass
     return False
 
+# --- CONCURRENCY CONTROL ---
+semaphore = asyncio.Semaphore(15)
+
+async def check_with_sem(coro):
+    async with semaphore:
+        return await coro
+
 async def hunter_loop():
     stats["status"] = "Hunting..."
-    async with aiohttp.ClientSession() as session:
+    timeout = aiohttp.ClientTimeout(total=10)
+    async with aiohttp.ClientSession(timeout=timeout) as session:
         while True:
             try:
+                print(f"[*] Starting batch check ({BATCH_SIZE} seeds)...")
                 batch_seeds = []
                 for _ in range(BATCH_SIZE):
                     mnemonic = Bip39MnemonicGenerator().FromWordsNum(Bip39WordsNum.WORDS_NUM_12)
@@ -167,12 +176,12 @@ async def hunter_loop():
                 task_info = []
                 
                 btc_addrs = [s["BTC"] for s in batch_seeds]
-                tasks.append(check_balance_btc(session, btc_addrs))
+                tasks.append(check_with_sem(check_balance_btc(session, btc_addrs)))
                 task_info.append(("BTC_BATCH", None))
                 
                 for coin_name, slug in [("LTC", "ltc"), ("DOGE", "doge"), ("BCH", "bch"), ("DASH", "dash")]:
                     addrs = [s[coin_name] for s in batch_seeds]
-                    tasks.append(check_balance_blockcypher(session, slug, addrs))
+                    tasks.append(check_with_sem(check_balance_blockcypher(session, slug, addrs)))
                     task_info.append(("LEGACY_BATCH", (coin_name, addrs)))
 
                 rpc_configs = [
@@ -184,12 +193,12 @@ async def hunter_loop():
                 
                 for coin_name, rpc_url in rpc_configs:
                     for s in batch_seeds:
-                        tasks.append(check_balance_rpc(session, rpc_url, s[coin_name]))
+                        tasks.append(check_with_sem(check_balance_rpc(session, rpc_url, s[coin_name])))
                         task_info.append(("SINGLE", (coin_name, s[coin_name], s["mnemonic"])))
 
                 # Solana Check
                 for s in batch_seeds:
-                    tasks.append(check_balance_solana(session, s["SOL"]))
+                    tasks.append(check_with_sem(check_balance_solana(session, s["SOL"])))
                     task_info.append(("SINGLE", ("SOL", s["SOL"], s["mnemonic"])))
 
                 results = await asyncio.gather(*tasks)
@@ -214,7 +223,7 @@ async def hunter_loop():
 
                 stats["checked_count"] += BATCH_SIZE
                 stats["last_mnemonic"] = batch_seeds[-1]["mnemonic"]
-                print(f"[*] Checked: {stats['checked_count']} | Speed: {stats['checked_count'] / (time.time() - stats['start_time']):.2f} seeds/sec", end="\r")
+                print(f"[*] Batch complete. Total: {stats['checked_count']} | Speed: {stats['checked_count'] / (time.time() - stats['start_time']):.2f} seeds/sec")
                 
             except Exception as e:
                 print(f"\n[!] Error in hunter_loop: {e}")
