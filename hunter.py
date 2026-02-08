@@ -164,7 +164,7 @@ async def hunter_loop():
                 stats["status"] = f"Hunting (Batch size: {BATCH_SIZE})..."
                 batch_seeds = []
                 for _ in range(BATCH_SIZE):
-                    mnemonic = Bip39MnemonicGenerator().FromWordsNum(Bip39WordsNum.WORDS_NUM_12)
+                    mnemonic = Bip39MnemonicGenerator().FromWordsNumber(Bip39WordsNum.WORDS_NUM_12)
                     seed_bytes = Bip39SeedGenerator(mnemonic).Generate()
                     
                     addrs = {"mnemonic": str(mnemonic)}
