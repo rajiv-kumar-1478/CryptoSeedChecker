@@ -1,0 +1,4 @@
+bip_utils
+mnemonic
+aiohttp
+python-telegram-bot
