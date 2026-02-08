@@ -15,7 +15,7 @@ TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN")
 TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID")
 
 try:
-    BATCH_SIZE = int(os.environ.get("BATCH_SIZE")
+    BATCH_SIZE = int(os.environ.get("BATCH_SIZE", 20))
 except (ValueError, TypeError):
     BATCH_SIZE = 20
 
@@ -108,6 +108,24 @@ async def check_balance_blockcypher(session, coin_slug, addresses):
         pass
     return None
 
+async def check_balance_solana(session, address):
+    url = "https://api.mainnet-beta.solana.com"
+    payload = {
+        "jsonrpc": "2.0",
+        "id": 1,
+        "method": "getBalance",
+        "params": [address]
+    }
+    try:
+        async with session.post(url, json=payload) as resp:
+            data = await resp.json()
+            balance = data.get("result", {}).get("value", 0)
+            if balance > 0:
+                return True
+    except:
+        pass
+    return False
+
 async def check_balance_rpc(session, rpc_url, address):
     payload = {
         "jsonrpc": "2.0",
@@ -129,68 +147,79 @@ async def hunter_loop():
     stats["status"] = "Hunting..."
     async with aiohttp.ClientSession() as session:
         while True:
-            batch_seeds = []
-            for _ in range(BATCH_SIZE):
-                mnemonic = Bip39MnemonicGenerator().FromWordsNum(Bip39WordsNum.WORDS_NUM_12)
-                seed_bytes = Bip39SeedGenerator(mnemonic).Generate()
-                
-                addrs = {"mnemonic": str(mnemonic)}
-                for name, coin in COINS.items():
-                    bip44_mst_ctx = Bip44.FromSeed(seed_bytes, coin)
-                    bip44_acc_ctx = bip44_mst_ctx.Purpose().Coin().Account(0)
-                    bip44_chg_ctx = bip44_acc_ctx.Change(Bip44Changes.CHAIN_EXT)
-                    bip44_addr_ctx = bip44_chg_ctx.AddressIndex(0)
-                    addrs[name] = bip44_addr_ctx.PublicKey().ToAddress()
-                
-                batch_seeds.append(addrs)
+            try:
+                batch_seeds = []
+                for _ in range(BATCH_SIZE):
+                    mnemonic = Bip39MnemonicGenerator().FromWordsNum(Bip39WordsNum.WORDS_NUM_12)
+                    seed_bytes = Bip39SeedGenerator(mnemonic).Generate()
+                    
+                    addrs = {"mnemonic": str(mnemonic)}
+                    for name, coin in COINS.items():
+                        bip44_mst_ctx = Bip44.FromSeed(seed_bytes, coin)
+                        bip44_acc_ctx = bip44_mst_ctx.Purpose().Coin().Account(0)
+                        bip44_chg_ctx = bip44_acc_ctx.Change(Bip44Changes.CHAIN_EXT)
+                        bip44_addr_ctx = bip44_chg_ctx.AddressIndex(0)
+                        addrs[name] = bip44_addr_ctx.PublicKey().ToAddress()
+                    
+                    batch_seeds.append(addrs)
 
-            tasks = []
-            task_info = []
-            
-            btc_addrs = [s["BTC"] for s in batch_seeds]
-            tasks.append(check_balance_btc(session, btc_addrs))
-            task_info.append(("BTC_BATCH", None))
-            
-            for coin_name, slug in [("LTC", "ltc"), ("DOGE", "doge"), ("BCH", "bch"), ("DASH", "dash")]:
-                addrs = [s[coin_name] for s in batch_seeds]
-                tasks.append(check_balance_blockcypher(session, slug, addrs))
-                task_info.append(("LEGACY_BATCH", (coin_name, addrs)))
+                tasks = []
+                task_info = []
+                
+                btc_addrs = [s["BTC"] for s in batch_seeds]
+                tasks.append(check_balance_btc(session, btc_addrs))
+                task_info.append(("BTC_BATCH", None))
+                
+                for coin_name, slug in [("LTC", "ltc"), ("DOGE", "doge"), ("BCH", "bch"), ("DASH", "dash")]:
+                    addrs = [s[coin_name] for s in batch_seeds]
+                    tasks.append(check_balance_blockcypher(session, slug, addrs))
+                    task_info.append(("LEGACY_BATCH", (coin_name, addrs)))
 
-            rpc_configs = [
-                ("ETH", "https://rpc.ankr.com/eth"),
-                ("BNB", "https://bsc-dataseed.binance.org"),
-                ("MATIC", "https://polygon-rpc.com"),
-                ("AVAX", "https://api.avax.network/ext/bc/C/rpc")
-            ]
-            
-            for coin_name, rpc_url in rpc_configs:
+                rpc_configs = [
+                    ("ETH", "https://rpc.ankr.com/eth"),
+                    ("BNB", "https://bsc-dataseed.binance.org"),
+                    ("MATIC", "https://polygon-rpc.com"),
+                    ("AVAX", "https://api.avax.network/ext/bc/C/rpc")
+                ]
+                
+                for coin_name, rpc_url in rpc_configs:
+                    for s in batch_seeds:
+                        tasks.append(check_balance_rpc(session, rpc_url, s[coin_name]))
+                        task_info.append(("SINGLE", (coin_name, s[coin_name], s["mnemonic"])))
+
+                # Solana Check
                 for s in batch_seeds:
-                    tasks.append(check_balance_rpc(session, rpc_url, s[coin_name]))
-                    task_info.append(("SINGLE", (coin_name, s[coin_name], s["mnemonic"])))
+                    tasks.append(check_balance_solana(session, s["SOL"]))
+                    task_info.append(("SINGLE", ("SOL", s["SOL"], s["mnemonic"])))
 
-            results = await asyncio.gather(*tasks)
+                results = await asyncio.gather(*tasks)
+                
+                for i, res in enumerate(results):
+                    if not res: continue
+                    task_type, info = task_info[i]
+                    msg = ""
+                    if task_type == "BTC_BATCH":
+                        m = next((s["mnemonic"] for s in batch_seeds if s["BTC"] == res), "Unknown")
+                        msg = f"🟢 SUCCESS: BTC Found!\nAddress: {res}\nSeed: {m}"
+                    elif task_type == "LEGACY_BATCH":
+                        coin, addrs = info
+                        m = next((s["mnemonic"] for s in batch_seeds if s[coin] == res), "Unknown")
+                        msg = f"🟢 SUCCESS: {coin} Found!\nAddress: {res}\nSeed: {m}"
+                    elif task_type == "SINGLE":
+                        coin, addr, mnem = info
+                        msg = f"🟢 SUCCESS: {coin} Found!\nAddress: {addr}\nSeed: {mnem}"
+                    if msg:
+                        print(f"\n[!!!] {msg}")
+                        await send_telegram(msg)
+
+                stats["checked_count"] += BATCH_SIZE
+                stats["last_mnemonic"] = batch_seeds[-1]["mnemonic"]
+                print(f"[*] Checked: {stats['checked_count']} | Speed: {stats['checked_count'] / (time.time() - stats['start_time']):.2f} seeds/sec", end="\r")
+                
+            except Exception as e:
+                print(f"\n[!] Error in hunter_loop: {e}")
+                await asyncio.sleep(5)
             
-            for i, res in enumerate(results):
-                if not res: continue
-                type, info = task_info[i]
-                msg = ""
-                if type == "BTC_BATCH":
-                    m = next((s["mnemonic"] for s in batch_seeds if s["BTC"] == res), "Unknown")
-                    msg = f"🟢 SUCCESS: BTC Found!\nAddress: {res}\nSeed: {m}"
-                elif type == "LEGACY_BATCH":
-                    coin, addrs = info
-                    m = next((s["mnemonic"] for s in batch_seeds if s[coin] == res), "Unknown")
-                    msg = f"🟢 SUCCESS: {coin} Found!\nAddress: {res}\nSeed: {m}"
-                elif type == "SINGLE":
-                    coin, addr, mnem = info
-                    msg = f"🟢 SUCCESS: {coin} Found!\nAddress: {addr}\nSeed: {mnem}"
-                if msg:
-                    print(f"\n[!!!] {msg}")
-                    await send_telegram(msg)
-
-            stats["checked_count"] += BATCH_SIZE
-            stats["last_mnemonic"] = batch_seeds[-1]["mnemonic"]
-            print(f"[*] Checked: {stats['checked_count']} | Speed: {stats['checked_count'] / (time.time() - stats['start_time']):.2f} seeds/sec", end="\r")
             await asyncio.sleep(1)
 
 async def main():
