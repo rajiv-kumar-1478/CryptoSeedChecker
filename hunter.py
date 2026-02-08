@@ -15,9 +15,9 @@ TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN")
 TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID")
 
 try:
-    BATCH_SIZE = int(os.environ.get("BATCH_SIZE", 25))
+    BATCH_SIZE = int(os.environ.get("BATCH_SIZE", 10))
 except (ValueError, TypeError):
-    BATCH_SIZE = 25
+    BATCH_SIZE = 10
 
 # GLOBAL STATS for Web Dashboard
 stats = {
@@ -144,19 +144,24 @@ async def check_balance_rpc(session, rpc_url, address):
     return False
 
 # --- CONCURRENCY CONTROL ---
-semaphore = asyncio.Semaphore(15)
+semaphore = asyncio.Semaphore(10)
 
 async def check_with_sem(coro):
     async with semaphore:
-        return await coro
+        try:
+            return await asyncio.wait_for(coro, timeout=15)
+        except asyncio.TimeoutError:
+            return None
+        except Exception:
+            return None
 
 async def hunter_loop():
     stats["status"] = "Hunting..."
-    timeout = aiohttp.ClientTimeout(total=10)
-    async with aiohttp.ClientSession(timeout=timeout) as session:
+    async with aiohttp.ClientSession() as session:
         while True:
             try:
-                print(f"[*] Starting batch check ({BATCH_SIZE} seeds)...")
+                # Update status for dashboard
+                stats["status"] = f"Hunting (Batch size: {BATCH_SIZE})..."
                 batch_seeds = []
                 for _ in range(BATCH_SIZE):
                     mnemonic = Bip39MnemonicGenerator().FromWordsNum(Bip39WordsNum.WORDS_NUM_12)
@@ -223,7 +228,8 @@ async def hunter_loop():
 
                 stats["checked_count"] += BATCH_SIZE
                 stats["last_mnemonic"] = batch_seeds[-1]["mnemonic"]
-                print(f"[*] Batch complete. Total: {stats['checked_count']} | Speed: {stats['checked_count'] / (time.time() - stats['start_time']):.2f} seeds/sec")
+                # Print to console for Render logs
+                print(f"[+] Batch Done! Total Seeds Checked: {stats['checked_count']}")
                 
             except Exception as e:
                 print(f"\n[!] Error in hunter_loop: {e}")
