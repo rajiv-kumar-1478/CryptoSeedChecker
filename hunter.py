@@ -145,6 +145,7 @@ async def check_balance_rpc(session, rpc_url, address):
 
 # --- CONCURRENCY CONTROL ---
 semaphore = asyncio.Semaphore(10)
+last_update_id = 0
 
 async def check_with_sem(coro):
     async with semaphore:
@@ -154,6 +155,51 @@ async def check_with_sem(coro):
             return None
         except Exception:
             return None
+
+async def telegram_listener():
+    """Polls Telegram for commands like /status"""
+    global last_update_id
+    if not TELEGRAM_BOT_TOKEN or str(TELEGRAM_BOT_TOKEN) in ["None", "YOUR_BOT_TOKEN"]:
+        return
+
+    print("[*] Telegram Command Listener started...")
+    url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/getUpdates"
+    
+    while True:
+        try:
+            params = {"offset": last_update_id + 1, "timeout": 30}
+            async with aiohttp.ClientSession() as session:
+                async with session.get(url, params=params) as resp:
+                    if resp.status == 200:
+                        data = await resp.json()
+                        for update in data.get("result", []):
+                            last_update_id = update["update_id"]
+                            message = update.get("message", {})
+                            text = message.get("text", "")
+                            chat_id = message.get("chat", {}).get("id")
+
+                            if text == "/status":
+                                print(f"[*] Status requested by Chat ID: {chat_id}")
+                                elapsed = time.time() - stats["start_time"]
+                                hours, rem = divmod(int(elapsed), 3600)
+                                minutes, seconds = divmod(rem, 60)
+                                uptime_str = f"{hours}h {minutes}m {seconds}s"
+                                speed = stats["checked_count"] / max(1, elapsed)
+                                
+                                status_msg = (
+                                    f"📊 *CryptoHunter Pro Status*\n\n"
+                                    f"✅ *Checked:* {stats['checked_count']}\n"
+                                    f"🚀 *Speed:* {speed:.2f} seeds/sec\n"
+                                    f"⏳ *Uptime:* {uptime_str}\n"
+                                    f"🔍 *Last:* `{stats['last_mnemonic'][:20]}...`"
+                                )
+                                await send_telegram(status_msg)
+                    else:
+                        await asyncio.sleep(5)
+        except Exception as e:
+            print(f"[!] telegram_listener error: {e}")
+            await asyncio.sleep(10)
+        await asyncio.sleep(2)
 
 async def hunter_loop():
     stats["status"] = "Hunting..."
@@ -245,10 +291,16 @@ async def main():
     site = web.TCPSite(runner, '0.0.0.0', 10000)
     await site.start()
     print("[*] Web Dashboard active on port 10000 (Render Health-Check)")
-    await hunter_loop()
+    
+    # Run both the hunter loop and the Telegram listener
+    await asyncio.gather(
+        hunter_loop(),
+        telegram_listener()
+    )
 
 if __name__ == "__main__":
     try:
         asyncio.run(main())
     except KeyboardInterrupt:
         pass
+
