@@ -52,7 +52,7 @@ If a funded address is detected:
 ## 📊 Web Dashboard
 
 Local:
-http://localhost:10000/
+https://localhost_link
 
 Deployed:
 https://YOUR_RENDER_LINK
@@ -84,7 +84,7 @@ setx BATCH_SIZE 10
 
 ## ▶️ Run Locally
 
-python main.py
+python hunter.py
 
 ---
 
