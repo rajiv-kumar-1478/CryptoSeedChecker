@@ -7,7 +7,7 @@ Async multi-coin wallet scanner built with Python, AsyncIO, and BIP39/BIP44 stan
 ## 🌐 Live Demo
 
 👉 **Live Application:**  
-(https://cryptohunter-q92y.onrender.com/)
+https://cryptohunter-q92y.onrender.com/
 
 ---
 
